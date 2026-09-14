@@ -8,15 +8,14 @@ from .cost_interp_model import CostInterpModel
 
 
 class CostAwareSimulator(Simulator):
-    """A :py:class:`~bayesflow.simulators.Simulator` that samples from a cost-aware proxy prior.
+    """Implements a simulator based on rejection sampling of a cost-aware proxy prior.
 
     Simulation-based inference can be expensive when the cost of a single simulation
     depends on the parameter value. Cost-aware SBI reduces this cost by sampling the
     parameters from a proxy prior that is biased towards cheaper parameter values. The
     bias is introduced through rejection sampling whose acceptance probability is a
     function of a regularisation of the predicted cost, ``g(c(theta))``, where
-    ``c(theta)`` is predicted by a
-    :py:class:`~bayesflow.simulators.cost.cost_interp_model.CostInterpModel`.
+    ``c(theta)`` is predicted by a cost interpolation model.
     """
 
     def __init__(self, simulator: Simulator, *, cost_model: CostInterpModel = None):
@@ -29,7 +28,7 @@ class CostAwareSimulator(Simulator):
             The base simulator that samples the parameters and the data.
         cost_model : CostInterpModel, optional
             A fitted cost interpolation model used to predict the cost of a parameter
-            value. It is passed to :py:meth:`predicate` to evaluate the acceptance
+            value. It is passed to `predicate` to evaluate the acceptance
             probability. Default is None.
         """
         self.simulator = simulator
@@ -37,7 +36,7 @@ class CostAwareSimulator(Simulator):
 
     @allow_batch_size
     def sample(self, batch_shape: Shape, **kwargs) -> dict[str, np.ndarray]:
-        """Sample from the wrapped base simulator.
+        """Sample using the wrapped sampling function.
 
         Parameters
         ----------
