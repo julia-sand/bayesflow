@@ -89,9 +89,8 @@ class CostAwareSimulator(Simulator):
         weights : np.ndarray
             Importance weights for the accepted samples.
         """
-        # Weight = 1 / (acceptance_probability * num_candidates)
-        # In rejection sampling, the weight for an accepted sample is 1/g(c(theta))
-        return 1.0 / g_val[accepted_mask]
+        g_accepted = g_val[accepted_mask]
+        return g_accepted / np.sum(g_accepted) if len(g_accepted) > 0 else np.array([])
 
     def compute_metrics(self, theta: np.ndarray, accepted_mask: np.ndarray, cost_model: CostInterpModel) -> dict[str, float]:
         """Compute performance metrics for the cost-aware sampling.
@@ -115,11 +114,10 @@ class CostAwareSimulator(Simulator):
         g_val = self.regularise_cost(predicted_cost)
         
         # Effective Sample Size (ESS)
-        # ESS = (sum w)^2 / sum(w^2)
-        weights = self.compute_weights(g_val, accepted_mask)
-        ess = np.sum(weights)**2 / np.sum(weights**2) if len(weights) > 0 else 0.0
+        # ESS = (sum w)^2 / n sum(w^2)
+        ess = np.sum(g_val[accepted_mask])**2 / (np.sum(accepted_mask)*np.sum(g_val[accepted_mask]**2)) if len(g_val[accepted_mask]) > 0 else 0.0
         
-        # Cost Gain (CG)
+        # Computational Gain (CG)
         # CG = (Average cost of prior samples) / (Average cost of accepted samples)
         avg_cost_prior = np.mean(predicted_cost)
         avg_cost_accepted = np.mean(predicted_cost[accepted_mask]) if np.any(accepted_mask) else avg_cost_prior
