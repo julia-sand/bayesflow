@@ -18,7 +18,7 @@ class CostAwareSimulator(Simulator):
     ``c(theta)`` is predicted by a cost interpolation model.
     """
 
-    def __init__(self, simulator: Simulator, *, cost_model: CostInterpModel = None):
+    def __init__(self, simulator: Simulator, *, cost_model: CostInterpModel = None, gmin: float = 1.0):
         """
         Initialize a cost-aware simulator that wraps a base simulator.
 
@@ -30,9 +30,13 @@ class CostAwareSimulator(Simulator):
             A fitted cost interpolation model used to predict the cost of a parameter
             value. It is passed to `predicate` to evaluate the acceptance
             probability. Default is None.
+        gmin : float, optional
+            Minimum value for the regularised cost used in the acceptance probability
+            calculation. Default is 1.0.
         """
         self.simulator = simulator
         self.cost_model = cost_model
+        self.gmin = gmin
 
     @allow_batch_size
     def sample(self, batch_shape: Shape, **kwargs) -> dict[str, np.ndarray]:
@@ -53,26 +57,101 @@ class CostAwareSimulator(Simulator):
         """
         return self.simulator.sample(batch_shape, **kwargs)
 
-    def predicate(self, samples: dict[str, np.ndarray], cost_model: CostInterpModel) -> np.ndarray:
-        """Placeholder for the cost-aware acceptance predicate.
+    def regularise_cost(self, cost: np.ndarray, k: float = 1.0) -> np.ndarray:
+        """Regularise the predicted cost to get the acceptance probability.
 
-        Given a batch of samples, this should return a boolean array of shape
-        ``(batch_size,)`` indicating which samples are accepted. The acceptance
-        probability is a function of a regularisation of the predicted cost,
-        ``g(c(theta))``, where ``c(theta)`` is predicted by ``cost_model``.
+        Parameters
+        ----------
+        cost : np.ndarray
+            Predicted cost for each parameter value.
+        k : float, optional
+            Power factor for cost regularisation. Default is 1.0.
+
+        Returns
+        -------
+        g_val : np.ndarray
+            Regularised cost values.
+        """
+        return np.maximum(self.gmin, cost**k)
+
+    def compute_weights(self, g_val: np.ndarray, accepted_mask: np.ndarray) -> np.ndarray:
+        """Compute importance weights for the accepted samples.
+
+        Parameters
+        ----------
+        g_val : np.ndarray
+            Regularised cost values for all candidates.
+        accepted_mask : np.ndarray
+            Boolean array indicating which candidates were accepted.
+
+        Returns
+        -------
+        weights : np.ndarray
+            Importance weights for the accepted samples.
+        """
+        # Weight = 1 / (acceptance_probability * num_candidates)
+        # In rejection sampling, the weight for an accepted sample is 1/g(c(theta))
+        return 1.0 / g_val[accepted_mask]
+
+    def compute_metrics(self, theta: np.ndarray, accepted_mask: np.ndarray, cost_model: CostInterpModel) -> dict[str, float]:
+        """Compute performance metrics for the cost-aware sampling.
+
+        Parameters
+        ----------
+        theta : np.ndarray
+            The candidate parameter values.
+        accepted_mask : np.ndarray
+            Boolean array indicating which candidates were accepted.
+        cost_model : CostInterpModel
+            The cost interpolation model.
+
+        Returns
+        -------
+        metrics : dict of str to float
+            A dictionary containing metrics 'ess' (Effective Sample Size)
+            and 'cg' (Computational Gain).
+        """
+        predicted_cost, _ = cost_model.predict(theta)
+        g_val = self.regularise_cost(predicted_cost)
+        
+        # Effective Sample Size (ESS)
+        # ESS = (sum w)^2 / sum(w^2)
+        weights = self.compute_weights(g_val, accepted_mask)
+        ess = np.sum(weights)**2 / np.sum(weights**2) if len(weights) > 0 else 0.0
+        
+        # Cost Gain (CG)
+        # CG = (Average cost of prior samples) / (Average cost of accepted samples)
+        avg_cost_prior = np.mean(predicted_cost)
+        avg_cost_accepted = np.mean(predicted_cost[accepted_mask]) if np.any(accepted_mask) else avg_cost_prior
+        cg = avg_cost_prior / avg_cost_accepted
+        
+        return {"ess": ess, "cg": cg}
+
+    def predicate(self, samples: dict[str, np.ndarray], cost_model: CostInterpModel) -> np.ndarray:
+        """The cost-aware acceptance predicate.
+
+        Given a batch of samples, this returns a boolean array indicating which
+        samples are accepted based on their predicted cost.
 
         Parameters
         ----------
         samples : dict of str to np.ndarray
             A batch of samples, as returned by :py:meth:`sample`.
         cost_model : CostInterpModel
-            A fitted cost interpolation model used to predict the cost of each
-            parameter value in the batch.
+            A fitted cost interpolation model.
 
         Returns
         -------
         accept : np.ndarray
             A boolean array of shape ``(batch_size,)``.
         """
-        raise NotImplementedError 
-
+        theta = samples["theta"]
+        predicted_cost, _ = cost_model.predict(theta)
+        
+        g_val = self.regularise_cost(predicted_cost)
+        
+        # Acceptance probability = gmin / g(cost(theta))
+        prob_accept = self.gmin / g_val
+        
+        # Rejection sampling: accept if random draw U(0, 1) <= prob_accept
+        return np.random.random(len(prob_accept)) <= prob_accept
