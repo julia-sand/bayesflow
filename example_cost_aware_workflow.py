@@ -2,7 +2,8 @@ import os
 import pickle
 import time
 import numpy as np
-import keras
+import torch
+import torch.nn as nn
 from bayesflow.simulators.benchmark_simulators.sir import SIR
 from bayesflow.simulators.cost import CostAwareSimulator, CostInterpModel
 from bayesflow.approximators import RatioApproximator, ContinuousApproximator
@@ -40,70 +41,46 @@ def main():
     # 4. Initialize the CostAwareSimulator
     # It wraps the SIR simulator and uses the fitted cost model
     cost_aware_sim = CostAwareSimulator(simulator=sir_sim, cost_model=cost_model)
-    
-    # --- PLACEHOLDER FOR MISSING FUNCTIONALITY ---
-    # Currently, CostAwareSimulator.predicate is not implemented and 
-    # CostAwareSimulator.sample just delegates to the base simulator.
-    # We define a custom predicate to demonstrate how the cost-aware logic works.
-    
-    def sir_cost_predicate(samples, cost_model):
-        """
-        Accept samples if the predicted cost is below a certain threshold.
-        """
-        # samples is a dict; in the case of the SIR simulator, 'theta' contains [beta, gamma]
-        theta = samples["theta"]
-        # Predict mean cost for these parameters
-        predicted_mean, _ = cost_model.predict(theta)
         
-        # Threshold for "acceptable" cost
-        threshold = 0.5
-        return predicted_mean < threshold
-
-    # Monkey-patch the predicate for the example
-    cost_aware_sim.predicate = sir_cost_predicate
-    # ---------------------------------------------
-    
     # 5. Demonstrate the effect of cost-awareness
     print("\nTesting cost-aware sampling...")
     
-    # Generate a batch of candidates from the prior
+    # Use rejection_sample from the base Simulator class via CostAwareSimulator
+    num_samples = 20
+    
+    # We create a lambda to pass the cost_model to the predicate
+    cost_predicate = lambda samples: cost_aware_sim.predicate(samples, cost_model)
+    
+    # This will keep sampling until we have exactly num_samples accepted
+    accepted_samples = cost_aware_sim.rejection_sample(
+        batch_shape=(num_samples,),
+        predicate=cost_predicate
+    )
+    
+    # The base SIR simulator returns "parameters" and "observables"
+    accepted_theta = accepted_samples.get("theta")
+    if accepted_theta is None:
+        accepted_theta = accepted_samples.get("parameters")
+
+    print(f"Successfully sampled {len(accepted_theta)} cost-efficient parameters.")
+
+    # To compute metrics, we need to see how many total candidates were generated.
+    # Since rejection_sample abstracts this, for the sake of the example's metrics,
+    # we'll perform a manual batch check to demonstrate compute_metrics.
     num_candidates = 100
     candidates_theta = np.array([sir_sim.prior() for _ in range(num_candidates)])
     candidates_dict = {"theta": candidates_theta}
-    
-    # Evaluate which candidates are "cheap" enough using the cost model
-    # UPDATED: now passing candidates_dict to predicate
     accepted_mask = cost_aware_sim.predicate(candidates_dict, cost_model)
     num_accepted = np.sum(accepted_mask)
     
-    print(f"Total candidates generated: {num_candidates}")
-    print(f"Candidates accepted by cost predicate: {num_accepted}")
-    print(f"Acceptance rate: {num_accepted/num_candidates:.2%}")
-    
-    if num_accepted > 0:
-        # Compute performance metrics
-        # UPDATED: passing the candidates_dict instead of just candidates_theta
-        metrics = cost_aware_sim.compute_metrics(candidates_dict, accepted_mask, cost_model)
-        print("\nPerformance Metrics:")
-        print(f"  ESS: {metrics['ess']:.2f}")
-        print(f"  CG:  {metrics['cg']:.2f}")
-        
-        # Compute importance weights for accepted samples
-        # We need the g_val for this, so we'll replicate the internal step for the example
-        # UPDATED: predict takes theta from candidates_dict
-        predicted_cost, _ = cost_model.predict(candidates_dict["theta"])
-        g_val = cost_aware_sim.regularise_cost(predicted_cost)
-        weights = cost_aware_sim.compute_weights(g_val, accepted_mask)
-        
-        print(f"  Computed {len(weights)} weights for accepted samples.")
-        print(f"  Sum of weights: {np.sum(weights):.2f}")
+    metrics = cost_aware_sim.compute_metrics(candidates_dict, accepted_mask, cost_model)
+    print("\nPerformance Metrics (based on a test batch of 100):")
+    print(f"  ESS: {metrics['ess']:.2f}")
+    print(f"  CG:  {metrics['cg']:.2f}")
 
-        # Only run the expensive simulator on accepted parameters
-        accepted_theta = candidates_dict["theta"][accepted_mask]
-        results = [sir_sim.observation_model(t) for t in accepted_theta]
-        print(f"\nSuccessfully simulated {len(results)} cost-efficient samples.")
-    else:
-        print("No candidates were accepted. Try increasing the cost threshold.")
+    # Only run the expensive simulator on accepted parameters
+    results = [sir_sim.observation_model(t) for t in accepted_theta]
+    print(f"\nSuccessfully simulated {len(results)} samples using the expensive simulator.")
 
     # 6. Example: Train a model (Approximator) on the cost-efficient samples
     print("\nTraining an example model on cost-efficient samples...")
@@ -147,10 +124,12 @@ def main():
         transformed_data = adapter(train_data)
         
         # Define a simple MLP for the inference network
-        inference_net = keras.Sequential([
-            keras.layers.Dense(64, activation="relu"),
-            keras.layers.Dense(32, activation="relu"),
-        ])
+        inference_net = nn.Sequential(
+            nn.Linear(train_observations.shape[1], 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+        )
         
         # Initialize ContinuousApproximator
         # Pass the adapter to the approximator

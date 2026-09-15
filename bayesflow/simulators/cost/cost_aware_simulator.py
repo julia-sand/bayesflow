@@ -110,12 +110,16 @@ class CostAwareSimulator(Simulator):
             A dictionary containing metrics 'ess' (Effective Sample Size)
             and 'cg' (Computational Gain).
         """
+        if isinstance(theta, dict):
+            theta = theta["theta"]
         predicted_cost, _ = cost_model.predict(theta)
         g_val = self.regularise_cost(predicted_cost)
         
         # Effective Sample Size (ESS)
         # ESS = (sum w)^2 / n sum(w^2)
         ess = np.sum(g_val[accepted_mask])**2 / (np.sum(accepted_mask)*np.sum(g_val[accepted_mask]**2)) if len(g_val[accepted_mask]) > 0 else 0.0
+
+
         
         # Computational Gain (CG)
         # CG = (Average cost of prior samples) / (Average cost of accepted samples)
@@ -143,7 +147,12 @@ class CostAwareSimulator(Simulator):
         accept : np.ndarray
             A boolean array of shape ``(batch_size,)``.
         """
-        theta = samples["theta"]
+        theta = samples.get("theta")
+        if theta is None:
+            theta = samples.get("parameters")
+        if theta is None:
+            raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
+
         predicted_cost, _ = cost_model.predict(theta)
         
         g_val = self.regularise_cost(predicted_cost)
