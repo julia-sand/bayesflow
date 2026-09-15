@@ -49,12 +49,12 @@ def main():
     num_samples = 20
     
     # We create a lambda to pass the cost_model to the predicate
-    cost_predicate = lambda samples: cost_aware_sim.predicate(samples, cost_model)
+    #cost_predicate = lambda samples: cost_aware_sim.predicate(samples)
     
     # This will keep sampling until we have exactly num_samples accepted
     accepted_samples = cost_aware_sim.rejection_sample(
         batch_shape=(num_samples,),
-        predicate=cost_predicate
+        predicate=cost_aware_sim.predicate#cost_predicate
     )
     
     # The base SIR simulator returns "parameters" and "observables"
