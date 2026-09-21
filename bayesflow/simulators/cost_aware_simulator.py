@@ -16,7 +16,7 @@ class CostAwareSimulator(Simulator):
     ``c(theta)`` is predicted by a cost interpolation model.
     """
 
-    def __init__(self, simulator: Simulator, cost_model, *, gmin: float = 1.0):
+    def __init__(self, simulator: Simulator, cost_model, *, gmin: float = 0.5):
         """
         Initialize a cost-aware simulator that wraps a base simulator.
 
@@ -37,7 +37,7 @@ class CostAwareSimulator(Simulator):
         self.gmin = gmin #cost offset 
 
     @allow_batch_size
-    def sample(self, batch_shape: Shape, **kwargs) -> dict[str, np.ndarray]:
+    def sample(self, batch_shape: Shape, cost_aware: bool = True, **kwargs) -> dict[str, np.ndarray]:
         """Sample using the wrapped sampling function.
 
         Parameters
@@ -45,6 +45,8 @@ class CostAwareSimulator(Simulator):
         batch_shape : Shape
             The shape of the batch to sample. Typically, a tuple indicating the number
             of samples, but an int can also be passed.
+        cost_aware : bool, optional
+            Whether to use rejection sampling based on cost. Default is True.
         **kwargs
             Additional keyword arguments passed to the base simulator.
 
@@ -54,10 +56,13 @@ class CostAwareSimulator(Simulator):
             A dictionary of sampled outputs.
         """
 
+        if not cost_aware:
+            return self.simulator.sample(batch_shape, **kwargs)
+
         print("Cost Aware simulator does rejection sampling based on the cost function")
 
         return self.simulator.rejection_sample(batch_shape, predicate=self.predicate)
-
+            
     def regularise_cost(self, cost: np.ndarray, k: float = 1.0) -> np.ndarray:
         """Regularise the predicted cost to get the acceptance probability.
 
@@ -73,55 +78,65 @@ class CostAwareSimulator(Simulator):
         g_val : np.ndarray
             Regularised cost values.
         """
-        return np.maximum(self.gmin, cost**k)
+        return np.maximum(self.gmin, (cost+self.gmin)**k)
 
-    def compute_weights(self, g_val: np.ndarray, accepted_mask: np.ndarray) -> np.ndarray:
+    def compute_weights(self, theta: np.ndarray) -> np.ndarray:
         """Compute importance weights for the accepted samples.
 
         Parameters
         ----------
-        g_val : np.ndarray
-            Regularised cost values for all candidates.
-        accepted_mask : np.ndarray
-            Boolean array indicating which candidates were accepted.
-
+        theta : np.ndarray
+                    The parameter values sampled by the cost-aware sampler.
         Returns
         -------
         weights : np.ndarray
             Importance weights for the accepted samples.
         """
-        g_accepted = g_val[accepted_mask]
+
+        if isinstance(theta, dict):
+            theta = theta["theta"]
+
+
+        g_accepted = self.regularise_cost(self.cost_model.predict(theta)[0])
+
         return g_accepted / np.sum(g_accepted) if len(g_accepted) > 0 else np.array([])
 
-    def compute_metrics(self, theta: np.ndarray, accepted_mask: np.ndarray) -> dict[str, float]:
+    def compute_metrics(self, theta: np.ndarray) -> dict[str, float]:
         """Compute performance metrics for the cost-aware sampling.
 
         Parameters
         ----------
         theta : np.ndarray
-            The candidate parameter values.
-        accepted_mask : np.ndarray
-            Boolean array indicating which candidates were accepted.
-        
+            The parameter values sampled by the cost-aware sampler.
+         
         Returns
         -------
         metrics : dict of str to float
             A dictionary containing metrics 'ess' (Effective Sample Size)
             and 'cg' (Computational Gain).
         """
+
         if isinstance(theta, dict):
             theta = theta["theta"]
+
         predicted_cost, _ = self.cost_model.predict(theta)
         g_val = self.regularise_cost(predicted_cost)
         
         # Effective Sample Size (ESS)
         # ESS = (sum w)^2 / n sum(w^2)
-        ess = np.sum(g_val[accepted_mask])**2 / (np.sum(accepted_mask)*np.sum(g_val[accepted_mask]**2)) if len(g_val[accepted_mask]) > 0 else 0.0
+        ess = np.sum(g_val)**2 / (len(g_val)*np.sum(g_val**2)) if len(g_val) > 0 else 0.0
 
         # Computational Gain (CG)
         # CG = (Average cost of prior samples) / (Average cost of accepted samples)
-        avg_cost_prior = np.mean(predicted_cost)
-        avg_cost_accepted = np.mean(predicted_cost[accepted_mask]) if np.any(accepted_mask) else avg_cost_prior
+        # sample new thetas from the original prior 
+        
+        theta_new = self.sample(batch_shape=g_val.shape, cost_aware=False)
+        prior_cost, _ = self.cost_model.predict(theta_new.get("parameters"))
+
+        avg_cost_prior = np.mean(prior_cost)
+
+        avg_cost_accepted = np.mean(predicted_cost) 
+
         cg = avg_cost_prior / avg_cost_accepted
         
         return {"ess": ess, "cg": cg}
