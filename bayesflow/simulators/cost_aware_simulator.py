@@ -34,7 +34,7 @@ class CostAwareSimulator(Simulator):
         """
         self.simulator = simulator
         self.cost_model = cost_model
-        self.gmin = gmin
+        self.gmin = gmin #cost offset 
 
     @allow_batch_size
     def sample(self, batch_shape: Shape, **kwargs) -> dict[str, np.ndarray]:
@@ -53,7 +53,10 @@ class CostAwareSimulator(Simulator):
         data : dict of str to np.ndarray
             A dictionary of sampled outputs.
         """
-        return self.simulator.sample(batch_shape, **kwargs)
+
+        print("Cost Aware simulator does rejection sampling based on the cost function")
+
+        return self.simulator.rejection_sample(batch_shape, predicate=self.predicate)
 
     def regularise_cost(self, cost: np.ndarray, k: float = 1.0) -> np.ndarray:
         """Regularise the predicted cost to get the acceptance probability.
