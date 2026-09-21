@@ -3,9 +3,7 @@ import numpy as np
 from bayesflow.types import Shape
 from bayesflow.utils.decorators import allow_batch_size
 
-from ..simulator import Simulator
-from .cost_interp_model import CostInterpModel
-
+from .simulator import Simulator
 
 class CostAwareSimulator(Simulator):
     """Implements a simulator based on rejection sampling of a cost-aware proxy prior.
@@ -18,7 +16,7 @@ class CostAwareSimulator(Simulator):
     ``c(theta)`` is predicted by a cost interpolation model.
     """
 
-    def __init__(self, simulator: Simulator, *, cost_model: CostInterpModel = None, gmin: float = 1.0):
+    def __init__(self, simulator: Simulator, cost_model, *, gmin: float = 1.0):
         """
         Initialize a cost-aware simulator that wraps a base simulator.
 
@@ -26,10 +24,10 @@ class CostAwareSimulator(Simulator):
         ----------
         simulator : Simulator
             The base simulator that samples the parameters and the data.
-        cost_model : CostInterpModel, optional
+        cost_model : Model
             A fitted cost interpolation model used to predict the cost of a parameter
             value. It is passed to `predicate` to evaluate the acceptance
-            probability. Default is None.
+            probability. 
         gmin : float, optional
             Minimum value for the regularised cost used in the acceptance probability
             calculation. Default is 1.0.
@@ -92,7 +90,7 @@ class CostAwareSimulator(Simulator):
         g_accepted = g_val[accepted_mask]
         return g_accepted / np.sum(g_accepted) if len(g_accepted) > 0 else np.array([])
 
-    def compute_metrics(self, theta: np.ndarray, accepted_mask: np.ndarray, cost_model: CostInterpModel) -> dict[str, float]:
+    def compute_metrics(self, theta: np.ndarray, accepted_mask: np.ndarray) -> dict[str, float]:
         """Compute performance metrics for the cost-aware sampling.
 
         Parameters
@@ -101,9 +99,7 @@ class CostAwareSimulator(Simulator):
             The candidate parameter values.
         accepted_mask : np.ndarray
             Boolean array indicating which candidates were accepted.
-        cost_model : CostInterpModel
-            The cost interpolation model.
-
+        
         Returns
         -------
         metrics : dict of str to float
@@ -112,15 +108,13 @@ class CostAwareSimulator(Simulator):
         """
         if isinstance(theta, dict):
             theta = theta["theta"]
-        predicted_cost, _ = cost_model.predict(theta)
+        predicted_cost, _ = self.cost_model.predict(theta)
         g_val = self.regularise_cost(predicted_cost)
         
         # Effective Sample Size (ESS)
         # ESS = (sum w)^2 / n sum(w^2)
         ess = np.sum(g_val[accepted_mask])**2 / (np.sum(accepted_mask)*np.sum(g_val[accepted_mask]**2)) if len(g_val[accepted_mask]) > 0 else 0.0
 
-
-        
         # Computational Gain (CG)
         # CG = (Average cost of prior samples) / (Average cost of accepted samples)
         avg_cost_prior = np.mean(predicted_cost)
@@ -129,7 +123,7 @@ class CostAwareSimulator(Simulator):
         
         return {"ess": ess, "cg": cg}
 
-    def predicate(self, samples: dict[str, np.ndarray], cost_model: CostInterpModel) -> np.ndarray:
+    def predicate(self, samples: dict[str, np.ndarray]) -> np.ndarray:
         """The cost-aware acceptance predicate.
 
         Given a batch of samples, this returns a boolean array indicating which
@@ -139,9 +133,7 @@ class CostAwareSimulator(Simulator):
         ----------
         samples : dict of str to np.ndarray
             A batch of samples, as returned by :py:meth:`sample`.
-        cost_model : CostInterpModel
-            A fitted cost interpolation model.
-
+        
         Returns
         -------
         accept : np.ndarray
@@ -153,7 +145,7 @@ class CostAwareSimulator(Simulator):
         if theta is None:
             raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
 
-        predicted_cost, _ = cost_model.predict(theta)
+        predicted_cost, _ = self.cost_model.predict(theta)
         
         g_val = self.regularise_cost(predicted_cost)
         
