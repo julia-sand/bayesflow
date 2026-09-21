@@ -16,7 +16,7 @@ class CostAwareSimulator(Simulator):
     ``c(theta)`` is predicted by a cost interpolation model.
     """
 
-    def __init__(self, simulator: Simulator, cost_model, *, gmin: float = 0.5):
+    def __init__(self, simulator: Simulator, cost_model, *, gmin: float = 0.2):
         """
         Initialize a cost-aware simulator that wraps a base simulator.
 
