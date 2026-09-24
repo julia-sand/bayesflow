@@ -14,7 +14,7 @@ class CostAwareSimulator(Simulator):
     depends on the parameter value. Cost-aware SBI reduces this cost by sampling the
     parameters from a proxy prior that is biased towards cheaper parameter values. The
     bias is introduced through rejection sampling whose acceptance probability is a
-    function of a regularisation of the predicted cost, ``g(c(theta))``, where
+    function of a regularization of the predicted cost, ``g(c(theta))``, where
     ``c(theta)`` is predicted by a cost interpolation model.
     """
 
@@ -31,7 +31,7 @@ class CostAwareSimulator(Simulator):
             value. It is used to evaluate the acceptance
             probability.
         gmin : float, optional
-            Minimum value for the regularised cost used in the acceptance probability
+            Minimum value for the regularized cost used in the acceptance probability
             calculation. Default is 0.2.
         max_attempts : int, optional
             Maximum number of sampling batches to attempt before giving up and
@@ -52,7 +52,7 @@ class CostAwareSimulator(Simulator):
             The shape of the batch to sample. Typically, a tuple indicating the number
             of samples, but an int can also be passed.
         k : float, np.ndarray, list, optional
-            Power factor for cost regularisation. If a vector is provided, the total
+            Power factor for cost regularization. If a vector is provided, the total
             batch is split equally among the provided k values. Default is 1.0.
         cost_aware : bool, optional
             Whether to use rejection sampling based on cost. Default is True.
@@ -147,20 +147,20 @@ class CostAwareSimulator(Simulator):
 
         return final_results
 
-    def regularise_cost(self, cost: np.ndarray, k: float = 1.0) -> np.ndarray:
-        """Regularise the predicted cost to get the acceptance probability.
+    def regularize_cost(self, cost: np.ndarray, k: float = 1.0) -> np.ndarray:
+        """Regularize the predicted cost to get the acceptance probability.
 
         Parameters
         ----------
         cost : np.ndarray
             Predicted cost for each parameter value, with shape ``(batch_size,)``.
         k : float, optional
-            Power factor for cost regularisation. Default is 1.0.
+            Power factor for cost regularization. Default is 1.0.
 
         Returns
         -------
         g_val : np.ndarray
-            Regularised cost values with shape ``(batch_size,)``.
+            Regularized cost values with shape ``(batch_size,)``.
         """
         return np.maximum(self.gmin, (cost+self.gmin)**k)
 
@@ -172,7 +172,7 @@ class CostAwareSimulator(Simulator):
         theta : np.ndarray
             The parameter values sampled, with shape ``(batch_size, *prior_shape)``.
         k : float
-            Power factor for cost regularisation.
+            Power factor for cost regularization.
 
         Returns
         -------
@@ -181,7 +181,7 @@ class CostAwareSimulator(Simulator):
         """
         costs = self.cost_model(theta)
 
-        g_accepted = self.regularise_cost(costs, k=k)
+        g_accepted = self.regularize_cost(costs, k=k)
 
         return g_accepted / np.sum(g_accepted) if len(g_accepted) > 0 else np.array([])
 
@@ -226,7 +226,7 @@ class CostAwareSimulator(Simulator):
         theta : np.ndarray
             The parameter values sampled by the cost-aware sampler.
         kvec : float, np.ndarray, list, optional
-            Power factor for cost regularisation. If a vector is provided, only the
+            Power factor for cost regularization. If a vector is provided, only the
             first entry is used. Default is 1.0.
 
         Returns
@@ -243,7 +243,7 @@ class CostAwareSimulator(Simulator):
 
         res = self.cost_model(theta)
         predicted_cost = res
-        g_val = self.regularise_cost(predicted_cost, k=k_val)
+        g_val = self.regularize_cost(predicted_cost, k=k_val)
 
         # Effective Sample Size (ESS)
         # ESS = (sum w)^2 / n sum(w^2)
@@ -276,7 +276,7 @@ class CostAwareSimulator(Simulator):
         samples : dict of str to np.ndarray
             A batch of samples, as returned by :py:meth:`sample`.
         k : float, optional
-            Power factor for cost regularisation. Default is 1.0.
+            Power factor for cost regularization. Default is 1.0.
 
         Returns
         -------
@@ -292,7 +292,7 @@ class CostAwareSimulator(Simulator):
         res = self.cost_model(theta)
         predicted_cost = res
 
-        g_val = self.regularise_cost(predicted_cost, k=k)
+        g_val = self.regularize_cost(predicted_cost, k=k)
 
         # Acceptance probability = gmin / g(cost(theta))
         prob_accept = self.gmin / g_val
