@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import numpy as np
 
 from bayesflow.types import Shape
@@ -16,29 +18,29 @@ class CostAwareSimulator(Simulator):
     ``c(theta)`` is predicted by a cost interpolation model.
     """
 
-    def __init__(self, simulator: Simulator, cost_model, *, gmin: float = 0.2):
+    def __init__(self, prior: Callable[[], np.ndarray], cost_model, *, gmin: float = 0.2):
         """
-        Initialize a cost-aware simulator that wraps a base simulator.
+        Initialize a cost-aware simulator that samples from a provided prior.
 
         Parameters
         ----------
-        simulator : Simulator
-            The base simulator that samples the parameters and the data.
+        prior : Callable[[], np.ndarray]
+            A function that returns a single draw from the parameter prior.
         cost_model : Model
             A fitted cost interpolation model used to predict the cost of a parameter
-            value. It is passed to `predicate` to evaluate the acceptance
+            value. It is use to evaluate the acceptance
             probability. 
         gmin : float, optional
             Minimum value for the regularised cost used in the acceptance probability
             calculation. Default is 1.0.
         """
-        self.simulator = simulator
+        self.prior = prior
         self.cost_model = cost_model
         self.gmin = gmin #cost offset 
 
     @allow_batch_size
     def sample(self, batch_shape: Shape, k: float | np.ndarray | list = 1.0, cost_aware: bool = True, **kwargs) -> dict[str, np.ndarray]:
-        """Sample using the wrapped sampling function.
+        """Sample the prior
 
         Parameters
         ----------
@@ -61,7 +63,10 @@ class CostAwareSimulator(Simulator):
         """
 
         if not cost_aware:
-            return self.simulator.sample(batch_shape, **kwargs)
+            # Return samples from the prior directly
+            total_samples = np.prod(batch_shape) if not isinstance(batch_shape, int) else batch_shape
+            theta_samples = np.stack([self.prior() for _ in range(total_samples)])
+            return {"parameters": theta_samples}
 
         k_vals = np.atleast_1d(k)
         n_k = len(k_vals)
@@ -75,10 +80,10 @@ class CostAwareSimulator(Simulator):
         samples_per_k = total_samples // n_k
         remainder = total_samples % n_k
 
-        all_outputs = []
+        all_outputs = {}
         all_ks = []
 
-        print(f"Cost Aware simulator does rejection sampling for {n_k} different k values")
+        print(f"Cost Aware simulator does rejection sampling of the prior for {n_k} different k values")
 
         for i, k_val in enumerate(k_vals):
             # Distribute remainder to the first few k values
@@ -86,21 +91,35 @@ class CostAwareSimulator(Simulator):
             if current_batch_size == 0:
                 continue
                 
-            predicate_with_k = lambda samples: self.predicate(samples, k=k_val)
-            res = self.simulator.rejection_sample(current_batch_size, predicate=predicate_with_k)
+            # Rejection sampling loop for parameters only
+            accepted_theta = []
+            while len(np.concatenate(accepted_theta)) < current_batch_size if accepted_theta else 0 < current_batch_size:
+                current_count = len(np.concatenate(accepted_theta)) if accepted_theta else 0
+                needed = current_batch_size - current_count
+                
+                # Sample a batch of parameters from the prior
+                # We use a reasonable batch size to avoid too many loops
+                sample_size = max(needed, current_batch_size)
+                theta_batch = np.stack([self.prior() for _ in range(sample_size)])
+                
+                # Evaluate predicate
+                mask = self.predicate({"parameters": theta_batch}, k=k_val)
+                accepted_theta.append(theta_batch[mask])
+            
+            # Concatenate and truncate to exact size
+            theta_accepted = np.concatenate(accepted_theta)[:current_batch_size]
+            res = {"parameters": theta_accepted}
             
             # Assume res is a dict of arrays
             for key, val in res.items():
                 if key not in all_outputs:
-                    all_outputs.append((key, []))
-                # Find index of key in all_outputs and append
-                idx = [x[0] for x in all_outputs].index(key)
-                all_outputs[idx] = (key, all_outputs[idx][1] + [val])
+                    all_outputs[key] = []
+                all_outputs[key].append(val)
             
             all_ks.append(np.full(current_batch_size, k_val))
 
         # Reconstruct results dictionary
-        final_results = {key: np.concatenate(vals) for key, vals in all_outputs}
+        final_results = {key: np.concatenate(vals) for key, vals in all_outputs.items()}
         final_results["k"] = np.concatenate(all_ks)
 
         return final_results
@@ -122,39 +141,59 @@ class CostAwareSimulator(Simulator):
         """
         return np.maximum(self.gmin, (cost+self.gmin)**k)
 
-    def compute_weights(self, theta: np.ndarray, kvec: float | np.ndarray | list = 1.0) -> np.ndarray:
-        """Compute importance weights for the accepted samples.
+    def compute_weights_per_k(self, theta: np.ndarray, k: float) -> np.ndarray:
+        """Compute importance weights for samples using a scalar k.
 
         Parameters
         ----------
         theta : np.ndarray
-                    The parameter values sampled by the cost-aware sampler.
-        kvec : float, np.ndarray, list, optional
-            Power factor for cost regularisation. Must be a scalar or a vector
-            of the same length as theta. Default is 1.0.
+            The parameter values sampled.
+        k : float
+            Power factor for cost regularisation.
+
+        Returns
+        -------
+        weights : np.ndarray
+            Importance weights for the samples.
+        """
+        costs = self.cost_model(theta)
+
+        g_accepted = self.regularise_cost(costs, k=k)
+
+        return g_accepted / np.sum(g_accepted) if len(g_accepted) > 0 else np.array([])
+
+    def compute_weights(self, accepted_samples: dict[str, np.ndarray]) -> np.ndarray:
+        """Compute importance weights for the accepted samples.
+
+        Parameters
+        ----------
+        accepted_samples : dict of str to np.ndarray
+            A dictionary containing 'theta' (or 'parameters') and 'k' arrays.
+
         Returns
         -------
         weights : np.ndarray
             Importance weights for the accepted samples.
         """
-
-        if isinstance(theta, dict):
-            theta = theta["theta"]
-
-        kvec = np.atleast_1d(kvec)
-        if kvec.size == 1:
-            k_vals = np.full(len(theta), kvec[0])
-        elif kvec.size == len(theta):
-            k_vals = kvec
-        else:
-            raise ValueError("kvec must be a scalar or a vector of the same length as theta")
-
-        costs = self.cost_model.predict(theta)[0]
+        theta = accepted_samples.get("theta")
+        if theta is None:
+            theta = accepted_samples.get("parameters")
+        if theta is None:
+            raise KeyError("accepted_samples must contain 'theta' or 'parameters'.")
         
-        # Vectorized regularization
-        g_accepted = np.maximum(self.gmin, (costs + self.gmin)**k_vals)
+        k_vals = accepted_samples.get("k")
+        if k_vals is None:
+            raise KeyError("accepted_samples must contain 'k'.")
 
-        return g_accepted / np.sum(g_accepted) if len(g_accepted) > 0 else np.array([])
+        distinct_ks = np.unique(k_vals)
+        weights = np.zeros_like(k_vals, dtype=float)
+
+        for k in distinct_ks:
+            mask = (k_vals == k)
+            theta_k = theta[mask]
+            weights[mask] = self.compute_weights_per_k(theta_k, k)
+
+        return weights / len(k_vals)
 
     def compute_metrics(self, theta: np.ndarray, kvec: float | np.ndarray | list = 1.0) -> dict[str, float]:
         """Compute performance metrics for the cost-aware sampling.
@@ -179,7 +218,8 @@ class CostAwareSimulator(Simulator):
 
         k_val = kvec[0] if isinstance(kvec, (list, np.ndarray)) else kvec
 
-        predicted_cost, _ = self.cost_model.predict(theta)
+        res = self.cost_model(theta)
+        predicted_cost = res
         g_val = self.regularise_cost(predicted_cost, k=k_val)
         
         # Effective Sample Size (ESS)
@@ -191,7 +231,8 @@ class CostAwareSimulator(Simulator):
         # sample new thetas from the original prior 
         
         theta_new = self.sample(batch_shape=g_val.shape, k=k_val, cost_aware=False)
-        prior_cost, _ = self.cost_model.predict(theta_new.get("parameters"))
+        res_prior = self.cost_model(theta_new.get("parameters"))
+        prior_cost = res_prior
 
         avg_cost_prior = np.mean(prior_cost)
 
@@ -225,7 +266,8 @@ class CostAwareSimulator(Simulator):
         if theta is None:
             raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
 
-        predicted_cost, _ = self.cost_model.predict(theta)
+        res = self.cost_model(theta)
+        predicted_cost = res
         
         g_val = self.regularise_cost(predicted_cost, k=k)
         
