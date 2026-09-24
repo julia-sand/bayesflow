@@ -28,18 +28,18 @@ class CostAwareSimulator(Simulator):
             A function that returns a single draw from the parameter prior.
         cost_model : Model
             A fitted cost interpolation model used to predict the cost of a parameter
-            value. It is use to evaluate the acceptance
-            probability. 
+            value. It is used to evaluate the acceptance
+            probability.
         gmin : float, optional
             Minimum value for the regularised cost used in the acceptance probability
-            calculation. Default is 1.0.
+            calculation. Default is 0.2.
         max_attempts : int, optional
             Maximum number of sampling batches to attempt before giving up and
             returning whatever has been collected. Default is 1000.
         """
         self.prior = prior
         self.cost_model = cost_model
-        self.gmin = gmin #cost offset 
+        self.gmin = gmin #cost offset
         self.max_attempts = max_attempts
 
     @allow_batch_size
@@ -74,13 +74,13 @@ class CostAwareSimulator(Simulator):
 
         k_vals = np.atleast_1d(k)
         n_k = len(k_vals)
-        
+
         # Resolve total batch size
         if isinstance(batch_shape, int):
             total_samples = batch_shape
         else:
             total_samples = np.prod(batch_shape)
-        
+
         samples_per_k = total_samples // n_k
         remainder = total_samples % n_k
 
@@ -94,7 +94,7 @@ class CostAwareSimulator(Simulator):
             current_batch_size = samples_per_k + (1 if i < remainder else 0)
             if current_batch_size == 0:
                 continue
-                
+
             # Rejection sampling loop for parameters only
             accepted_theta = []
             attempts = 0
@@ -102,34 +102,34 @@ class CostAwareSimulator(Simulator):
                 attempts += 1
                 current_count = len(np.concatenate(accepted_theta)) if accepted_theta else 0
                 needed = current_batch_size - current_count
-                
+
                 # Sample a batch of parameters from the prior
                 # We use a reasonable batch size to avoid too many loops
                 sample_size = max(needed, current_batch_size)
                 theta_batch = np.stack([self.prior() for _ in range(sample_size)])
-                
+
                 # Evaluate predicate
                 mask = self.predicate({"parameters": theta_batch}, k=k_val)
                 accepted_theta.append(theta_batch[mask])
-            
+
             if attempts >= self.max_attempts and (not accepted_theta or len(np.concatenate(accepted_theta)) < current_batch_size):
                 print(f"Warning: Rejection sampling for k={k_val} reached max_attempts ({self.max_attempts}) "
                       f"without filling the batch. Collected {len(np.concatenate(accepted_theta)) if accepted_theta else 0} "
                       f"out of {current_batch_size} samples.")
-            
+
             # Concatenate and truncate to exact size
             theta_accepted = np.concatenate(accepted_theta)[:current_batch_size] if accepted_theta else np.array([]).reshape(0, *self.prior().shape)
-            
+
             # If we failed to get any samples, we might need to handle this to avoid downstream errors
             # For now, we'll keep the behavior of returning whatever we got, but we must ensure it's a numpy array.
             res = {"parameters": theta_accepted}
-            
+
             # Assume res is a dict of arrays
             for key, val in res.items():
                 if key not in all_outputs:
                     all_outputs[key] = []
                 all_outputs[key].append(val)
-            
+
             all_ks.append(np.full(current_batch_size, k_val))
 
         # Reconstruct results dictionary
@@ -137,7 +137,7 @@ class CostAwareSimulator(Simulator):
         final_results["k"] = np.concatenate(all_ks)
 
         return final_results
-            
+
     def regularise_cost(self, cost: np.ndarray, k: float = 1.0) -> np.ndarray:
         """Regularise the predicted cost to get the acceptance probability.
 
@@ -194,7 +194,7 @@ class CostAwareSimulator(Simulator):
             theta = accepted_samples.get("parameters")
         if theta is None:
             raise KeyError("accepted_samples must contain 'theta' or 'parameters'.")
-        
+
         k_vals = accepted_samples.get("k")
         if k_vals is None:
             raise KeyError("accepted_samples must contain 'k'.")
@@ -219,7 +219,7 @@ class CostAwareSimulator(Simulator):
         kvec : float, np.ndarray, list, optional
             Power factor for cost regularisation. If a vector is provided, only the
             first entry is used. Default is 1.0.
-         
+
         Returns
         -------
         metrics : dict of str to float
@@ -235,25 +235,25 @@ class CostAwareSimulator(Simulator):
         res = self.cost_model(theta)
         predicted_cost = res
         g_val = self.regularise_cost(predicted_cost, k=k_val)
-        
+
         # Effective Sample Size (ESS)
         # ESS = (sum w)^2 / n sum(w^2)
         ess = np.sum(g_val)**2 / (len(g_val)*np.sum(g_val**2)) if len(g_val) > 0 else 0.0
 
         # Computational Gain (CG)
         # CG = (Average cost of prior samples) / (Average cost of accepted samples)
-        # sample new thetas from the original prior 
-        
+        # sample new thetas from the original prior
+
         theta_new = self.sample(batch_shape=g_val.shape, k=k_val, cost_aware=False)
         res_prior = self.cost_model(theta_new.get("parameters"))
         prior_cost = res_prior
 
         avg_cost_prior = np.mean(prior_cost)
 
-        avg_cost_accepted = np.mean(predicted_cost) 
+        avg_cost_accepted = np.mean(predicted_cost)
 
         cg = avg_cost_prior / avg_cost_accepted
-        
+
         return {"ess": ess, "cg": cg}
 
     def predicate(self, samples: dict[str, np.ndarray], k: float = 1.0) -> np.ndarray:
@@ -268,7 +268,7 @@ class CostAwareSimulator(Simulator):
             A batch of samples, as returned by :py:meth:`sample`.
         k : float, optional
             Power factor for cost regularisation. Default is 1.0.
-        
+
         Returns
         -------
         accept : np.ndarray
@@ -282,11 +282,11 @@ class CostAwareSimulator(Simulator):
 
         res = self.cost_model(theta)
         predicted_cost = res
-        
+
         g_val = self.regularise_cost(predicted_cost, k=k)
-        
+
         # Acceptance probability = gmin / g(cost(theta))
         prob_accept = self.gmin / g_val
-        
+
         # Rejection sampling: accept if random draw U(0, 1) <= prob_accept
         return np.random.random(len(prob_accept)) <= prob_accept
