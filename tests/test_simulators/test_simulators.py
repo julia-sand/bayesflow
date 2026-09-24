@@ -1,6 +1,7 @@
 import pytest
 import keras
 import numpy as np
+from bayesflow.simulators import CostAwareSimulator
 
 
 def assert_unique_rows(array):
@@ -192,3 +193,86 @@ def test_model_comparison_simulator_shared_simulator_callable(batch_size):
     samples = mc_sim.sample(batch_size)
     assert "shared" in samples
     assert "model_indices" in samples
+
+
+def test_cost_aware_simulator_sample(batch_size):
+    # Setup: simple prior and cost model
+    def prior():
+        return np.random.uniform(0, 1, size=1)
+
+    # Cost model: cost increases with theta. Lower theta = cheaper.
+    def cost_model(theta):
+        return theta.flatten()
+
+    sim = CostAwareSimulator(prior=prior, cost_model=cost_model, gmin=0.1)
+
+    # Test cost_aware=False: should return samples directly from prior
+    samples_no_cost = sim.sample(batch_size, cost_aware=False)
+    assert "parameters" in samples_no_cost
+    assert samples_no_cost["parameters"].shape == (batch_size, 1)
+
+    # Test cost_aware=True: should return samples and k
+    samples_cost = sim.sample(batch_size, k=1.0, cost_aware=True)
+    assert "parameters" in samples_cost
+    assert "k" in samples_cost
+    assert samples_cost["parameters"].shape == (batch_size, 1)
+    assert samples_cost["k"].shape == (batch_size,)
+    np.testing.assert_array_equal(samples_cost["k"], np.ones(batch_size))
+
+
+def test_cost_aware_simulator_multiple_k(batch_size):
+    def prior():
+        return np.random.uniform(0, 1, size=1)
+
+    def cost_model(theta):
+        return theta.flatten()
+
+    sim = CostAwareSimulator(prior=prior, cost_model=cost_model)
+    k_vals = [0.5, 1.5]
+    
+    samples = sim.sample(batch_size, k=k_vals, cost_aware=True)
+    
+    assert "parameters" in samples
+    assert "k" in samples
+    assert samples["parameters"].shape == (batch_size, 1)
+    assert samples["k"].shape == (batch_size,)
+    
+    # Check if both k values are present (roughly equal split)
+    unique_ks, counts = np.unique(samples["k"], return_counts=True)
+    assert set(unique_ks) == set(k_vals)
+    assert np.abs(counts[0] - counts[1]) <= 1
+
+
+def test_cost_aware_simulator_weights(batch_size):
+    def prior():
+        return np.random.uniform(0, 1, size=1)
+
+    def cost_model(theta):
+        return theta.flatten()
+
+    sim = CostAwareSimulator(prior=prior, cost_model=cost_model)
+    
+    # Sample some data
+    samples = sim.sample(batch_size, k=1.0, cost_aware=True)
+    
+    weights = sim.compute_weights(samples)
+    assert weights.shape == (batch_size,)
+    np.testing.assert_allclose(np.sum(weights), 1.0)
+
+
+def test_cost_aware_simulator_metrics(batch_size):
+    def prior():
+        return np.random.uniform(0, 1, size=1)
+
+    def cost_model(theta):
+        return theta.flatten()
+
+    sim = CostAwareSimulator(prior=prior, cost_model=cost_model)
+    
+    samples = sim.sample(batch_size, k=1.0, cost_aware=True)
+    
+    metrics = sim.compute_metrics(samples["parameters"], kvec=1.0)
+    assert "ess" in metrics
+    assert "cg" in metrics
+    assert metrics["ess"] >= 0
+    assert metrics["cg"] >= 0
