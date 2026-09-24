@@ -18,7 +18,7 @@ class CostAwareSimulator(Simulator):
     ``c(theta)`` is predicted by a cost interpolation model.
     """
 
-    def __init__(self, prior: Callable[[], np.ndarray], cost_model, *, gmin: float = 0.2):
+    def __init__(self, prior: Callable[[], np.ndarray], cost_model, *, gmin: float = 0.2, max_attempts: int = 1000):
         """
         Initialize a cost-aware simulator that samples from a provided prior.
 
@@ -33,10 +33,14 @@ class CostAwareSimulator(Simulator):
         gmin : float, optional
             Minimum value for the regularised cost used in the acceptance probability
             calculation. Default is 1.0.
+        max_attempts : int, optional
+            Maximum number of sampling batches to attempt before giving up and
+            returning whatever has been collected. Default is 1000.
         """
         self.prior = prior
         self.cost_model = cost_model
         self.gmin = gmin #cost offset 
+        self.max_attempts = max_attempts
 
     @allow_batch_size
     def sample(self, batch_shape: Shape, k: float | np.ndarray | list = 1.0, cost_aware: bool = True, **kwargs) -> dict[str, np.ndarray]:
@@ -93,7 +97,9 @@ class CostAwareSimulator(Simulator):
                 
             # Rejection sampling loop for parameters only
             accepted_theta = []
-            while len(np.concatenate(accepted_theta)) < current_batch_size if accepted_theta else 0 < current_batch_size:
+            attempts = 0
+            while (len(np.concatenate(accepted_theta)) < current_batch_size if accepted_theta else 0 < current_batch_size) and attempts < self.max_attempts:
+                attempts += 1
                 current_count = len(np.concatenate(accepted_theta)) if accepted_theta else 0
                 needed = current_batch_size - current_count
                 
@@ -106,8 +112,16 @@ class CostAwareSimulator(Simulator):
                 mask = self.predicate({"parameters": theta_batch}, k=k_val)
                 accepted_theta.append(theta_batch[mask])
             
+            if attempts >= self.max_attempts and (not accepted_theta or len(np.concatenate(accepted_theta)) < current_batch_size):
+                print(f"Warning: Rejection sampling for k={k_val} reached max_attempts ({self.max_attempts}) "
+                      f"without filling the batch. Collected {len(np.concatenate(accepted_theta)) if accepted_theta else 0} "
+                      f"out of {current_batch_size} samples.")
+            
             # Concatenate and truncate to exact size
-            theta_accepted = np.concatenate(accepted_theta)[:current_batch_size]
+            theta_accepted = np.concatenate(accepted_theta)[:current_batch_size] if accepted_theta else np.array([]).reshape(0, *self.prior().shape)
+            
+            # If we failed to get any samples, we might need to handle this to avoid downstream errors
+            # For now, we'll keep the behavior of returning whatever we got, but we must ensure it's a numpy array.
             res = {"parameters": theta_accepted}
             
             # Assume res is a dict of arrays
