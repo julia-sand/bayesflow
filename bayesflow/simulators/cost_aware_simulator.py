@@ -62,8 +62,10 @@ class CostAwareSimulator(Simulator):
         Returns
         -------
         data : dict of str to np.ndarray
-            A dictionary of sampled outputs, including a 'k' array indicating which
-            k value was used for each sample.
+            A dictionary of sampled outputs. This typically includes:
+            - 'parameters': An array of shape ``(total_samples, *prior_shape)``.
+            - 'k': An array of shape ``(total_samples,)`` indicating which
+              k value was used for each sample.
         """
 
         if not cost_aware:
@@ -97,10 +99,10 @@ class CostAwareSimulator(Simulator):
 
             # Rejection sampling loop for parameters only
             accepted_theta = []
+            current_count = 0
             attempts = 0
-            while (len(np.concatenate(accepted_theta)) < current_batch_size if accepted_theta else 0 < current_batch_size) and attempts < self.max_attempts:
+            while current_count < current_batch_size and attempts < self.max_attempts:
                 attempts += 1
-                current_count = len(np.concatenate(accepted_theta)) if accepted_theta else 0
                 needed = current_batch_size - current_count
 
                 # Sample a batch of parameters from the prior
@@ -110,15 +112,22 @@ class CostAwareSimulator(Simulator):
 
                 # Evaluate predicate
                 mask = self.predicate({"parameters": theta_batch}, k=k_val)
-                accepted_theta.append(theta_batch[mask])
+                accepted_batch = theta_batch[mask]
+                
+                if len(accepted_batch) > 0:
+                    accepted_theta.append(accepted_batch)
+                    current_count += len(accepted_batch)
 
-            if attempts >= self.max_attempts and (not accepted_theta or len(np.concatenate(accepted_theta)) < current_batch_size):
+            if current_count < current_batch_size:
                 print(f"Warning: Rejection sampling for k={k_val} reached max_attempts ({self.max_attempts}) "
-                      f"without filling the batch. Collected {len(np.concatenate(accepted_theta)) if accepted_theta else 0} "
+                      f"without filling the batch. Collected {current_count} "
                       f"out of {current_batch_size} samples.")
 
             # Concatenate and truncate to exact size
-            theta_accepted = np.concatenate(accepted_theta)[:current_batch_size] if accepted_theta else np.array([]).reshape(0, *self.prior().shape)
+            if accepted_theta:
+                theta_accepted = np.concatenate(accepted_theta)[:current_batch_size]
+            else:
+                theta_accepted = np.array([]).reshape(0, *self.prior().shape)
 
             # If we failed to get any samples, we might need to handle this to avoid downstream errors
             # For now, we'll keep the behavior of returning whatever we got, but we must ensure it's a numpy array.
@@ -144,14 +153,14 @@ class CostAwareSimulator(Simulator):
         Parameters
         ----------
         cost : np.ndarray
-            Predicted cost for each parameter value.
+            Predicted cost for each parameter value, with shape ``(batch_size,)``.
         k : float, optional
             Power factor for cost regularisation. Default is 1.0.
 
         Returns
         -------
         g_val : np.ndarray
-            Regularised cost values.
+            Regularised cost values with shape ``(batch_size,)``.
         """
         return np.maximum(self.gmin, (cost+self.gmin)**k)
 
@@ -161,14 +170,14 @@ class CostAwareSimulator(Simulator):
         Parameters
         ----------
         theta : np.ndarray
-            The parameter values sampled.
+            The parameter values sampled, with shape ``(batch_size, *prior_shape)``.
         k : float
             Power factor for cost regularisation.
 
         Returns
         -------
         weights : np.ndarray
-            Importance weights for the samples.
+            Importance weights for the samples, with shape ``(batch_size,)``.
         """
         costs = self.cost_model(theta)
 
