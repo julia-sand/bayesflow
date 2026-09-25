@@ -8,13 +8,13 @@ from bayesflow.utils.decorators import allow_batch_size
 from .simulator import Simulator
 
 class CostAwareSimulator(Simulator):
-    """Implements a simulator based on rejection sampling of a cost-aware proxy prior.
+    """Samples a prior distribution based on a cost function.
 
-    Simulation-based inference can be expensive when the cost of a single simulation
-    depends on the parameter value. Cost-aware SBI reduces this cost by sampling the
-    parameters from a proxy prior that is biased towards cheaper parameter values. The
+    Simulation-based inference (SBI) can be expensive in terms of computational time. Its cost can often depend on the parameter values used in the simulation.
+    Cost-aware SBI reduces the cost of simulating data by sampling the
+    parameters from a proxy prior biased towards parameter values that have a lower simulation cost. The
     bias is introduced through rejection sampling whose acceptance probability is a
-    function of a regularization of the predicted cost, ``g(c(theta))``, where
+    function of a regularization of the cost, ``g(c(theta))``, where
     ``c(theta)`` is predicted by a cost interpolation model.
     """
 
@@ -34,7 +34,7 @@ class CostAwareSimulator(Simulator):
             Minimum value for the regularized cost used in the acceptance probability
             calculation. Default is 0.2.
         max_attempts : int, optional
-            Maximum number of sampling batches to attempt before giving up and
+            Maximum number of sampling batches to attempt before stopping and
             returning whatever has been collected. Default is 1000.
         """
         self.prior = prior
@@ -127,13 +127,11 @@ class CostAwareSimulator(Simulator):
             if accepted_theta:
                 theta_accepted = np.concatenate(accepted_theta)[:current_batch_size]
             else:
+                print(f"Warning: No samples were accepted. Try adjusting gmin or k.")
                 theta_accepted = np.array([]).reshape(0, *self.prior().shape)
 
-            # If we failed to get any samples, we might need to handle this to avoid downstream errors
-            # For now, we'll keep the behavior of returning whatever we got, but we must ensure it's a numpy array.
             res = {"parameters": theta_accepted}
 
-            # Assume res is a dict of arrays
             for key, val in res.items():
                 if key not in all_outputs:
                     all_outputs[key] = []
@@ -241,8 +239,7 @@ class CostAwareSimulator(Simulator):
 
         k_val = kvec[0] if isinstance(kvec, (list, np.ndarray)) else kvec
 
-        res = self.cost_model(theta)
-        predicted_cost = res
+        predicted_cost = self.cost_model(theta)
         g_val = self.regularize_cost(predicted_cost, k=k_val)
 
         # Effective Sample Size (ESS)
@@ -289,8 +286,7 @@ class CostAwareSimulator(Simulator):
         if theta is None:
             raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
 
-        res = self.cost_model(theta)
-        predicted_cost = res
+        predicted_cost = self.cost_model(theta)
 
         g_val = self.regularize_cost(predicted_cost, k=k)
 
