@@ -7,7 +7,7 @@ mathematical models, or data generating processes, with their primary function b
 from .sequential_simulator import SequentialSimulator
 from .hierarchical_simulator import HierarchicalSimulator
 from .lambda_simulator import LambdaSimulator
-from .cost_aware_simulator import CostAwareSimulator
+from .cost_aware_proposal import CostAwareProposal
 from .make_simulator import make_simulator
 from .model_comparison_simulator import ModelComparisonSimulator
 from .simulator import Simulator

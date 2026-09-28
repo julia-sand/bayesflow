@@ -1,7 +1,7 @@
 import pytest
 import keras
 import numpy as np
-from bayesflow.simulators import CostAwareSimulator
+from bayesflow.simulators import CostAwareProposal
 
 
 def assert_unique_rows(array):
@@ -222,7 +222,7 @@ def test_cost_aware_simulator_sample(batch_size):
     def cost_model(theta):
         return theta.flatten()
 
-    sim = CostAwareSimulator(prior=prior, cost_model=cost_model, gmin=0.1)
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model, gmin=0.1)
 
     # Test cost_aware=False: should return samples directly from prior
     samples_no_cost = sim.sample(batch_size, cost_aware=False)
@@ -245,7 +245,7 @@ def test_cost_aware_simulator_multiple_k(batch_size):
     def cost_model(theta):
         return theta.flatten()
 
-    sim = CostAwareSimulator(prior=prior, cost_model=cost_model)
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model)
     k_vals = [0.5, 1.5]
     
     samples = sim.sample(batch_size, k=k_vals, cost_aware=True)
@@ -268,7 +268,7 @@ def test_cost_aware_simulator_weights(batch_size):
     def cost_model(theta):
         return theta.flatten()
 
-    sim = CostAwareSimulator(prior=prior, cost_model=cost_model)
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model)
     
     # Sample some data
     samples = sim.sample(batch_size, k=1.0, cost_aware=True)
@@ -285,7 +285,7 @@ def test_cost_aware_simulator_metrics(batch_size):
     def cost_model(theta):
         return theta.flatten()
 
-    sim = CostAwareSimulator(prior=prior, cost_model=cost_model)
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model)
     
     samples = sim.sample(batch_size, k=1.0, cost_aware=True)
     
@@ -306,7 +306,7 @@ def test_cost_aware_simulator_max_attempts_limit():
         return np.full_like(theta.flatten(), 100.0)
 
     # Set very low max_attempts to force timeout
-    sim = CostAwareSimulator(prior=prior, cost_model=cost_model, gmin=0.1, max_attempts=2)
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model, gmin=0.1, max_attempts=2)
     
     # Request a batch that is unlikely to fill given the low acceptance rate
     batch_size = 100
@@ -331,7 +331,7 @@ def test_cost_aware_simulator_invalid_inputs():
     def cost_model(theta):
         return theta.flatten()
 
-    sim = CostAwareSimulator(prior=prior, cost_model=cost_model)
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model)
     
     # Test empty k list
     with pytest.raises((ValueError, IndexError)):
