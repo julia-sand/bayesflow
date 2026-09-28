@@ -196,14 +196,17 @@ class CostAwareProposal(Simulator):
         weights : np.ndarray
             Importance weights for the accepted samples.
         """
-        theta = accepted_samples.get("theta")
-        if theta is None:
-            theta = accepted_samples.get("parameters")
-        if theta is None:
-            raise KeyError("accepted_samples must contain 'theta' or 'parameters'.")
+        try:
+            theta = accepted_samples["theta"]
+        except KeyError:
+            try:
+                theta = accepted_samples["parameters"]
+            except KeyError:
+                raise KeyError("accepted_samples must contain 'theta' or 'parameters'.")
 
-        k_vals = accepted_samples.get("k")
-        if k_vals is None:
+        try:
+            k_vals = accepted_samples["k"]
+        except KeyError:
             raise KeyError("accepted_samples must contain 'k'.")
 
         distinct_ks = np.unique(k_vals)
@@ -280,11 +283,13 @@ class CostAwareProposal(Simulator):
         accept : np.ndarray
             A boolean array of shape ``(batch_size,)``.
         """
-        theta = samples.get("theta")
-        if theta is None:
-            theta = samples.get("parameters")
-        if theta is None:
-            raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
+        try:
+            theta = samples["theta"]
+        except KeyError:
+            try:
+                theta = samples["parameters"]
+            except KeyError:
+                raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
 
         predicted_cost = self.cost_model(theta)
 
