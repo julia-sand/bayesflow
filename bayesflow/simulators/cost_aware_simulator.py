@@ -20,7 +20,7 @@ class CostAwareSimulator(Simulator):
 
     def __init__(self, prior: Callable[[], np.ndarray], cost_model, *, gmin: float = 0.2, max_attempts: int = 1000):
         """
-        Initialize a cost-aware simulator that samples from a provided prior.
+        Initialize a cost-aware simulator that samples from a proxy prior that favours lower cost parameters.
 
         Parameters
         ----------
@@ -216,7 +216,7 @@ class CostAwareSimulator(Simulator):
             theta_k = theta[mask]
             weights[mask] = self.compute_weights_per_k(theta_k, k)
 
-        return weights
+        return weights / len(distinct_ks)
 
     def compute_metrics(self, theta: np.ndarray, kvec: float | np.ndarray | list = 1.0) -> dict[str, float]:
         """Compute performance metrics for the cost-aware sampling.
