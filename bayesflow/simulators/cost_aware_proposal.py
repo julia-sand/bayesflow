@@ -218,17 +218,66 @@ class CostAwareProposal(Simulator):
             weights[mask] = self.compute_weights_per_k(theta_k, k)
 
         return weights / len(distinct_ks)
-
-    def compute_metrics(self, theta: np.ndarray, kvec: float | np.ndarray | list = 1.0) -> dict[str, float]:
-        """Compute performance metrics for the cost-aware sampling.
+    
+    def compute_ess(self, theta: np.ndarray, k_vals: np.ndarray) -> float:
+        """Compute the Effective Sample Size (ESS).
 
         Parameters
         ----------
         theta : np.ndarray
-            The parameter values sampled by the cost-aware sampler.
-        kvec : float, np.ndarray, list, optional
-            Power factor for cost regularization. If a vector is provided, only the
-            first entry is used. Default is 1.0.
+            The accepted parameter samples.
+        k_vals : np.ndarray
+            The k values used for each sample.
+
+        Returns
+        -------
+        ess : float
+            The Effective Sample Size.
+        """
+        n = len(theta)
+        predicted_cost = self.cost_model(theta)
+        g_val = np.empty(n, dtype=float)
+
+        for k in np.unique(k_vals):
+            mask = k_vals == k
+            g_val[mask] = self.regularize_cost(predicted_cost[mask], k=k)
+
+        return np.sum(g_val) ** 2 / (n * np.sum(g_val**2)) if n > 0 else 0.0
+
+    def compute_cg(self, predicted_cost: np.ndarray) -> float:
+        """Compute the Computational Gain (CG).
+
+        Parameters
+        ----------
+        predicted_cost : np.ndarray
+            The predicted costs of the accepted samples.
+
+        Returns
+        -------
+        cg : float
+            The Computational Gain.
+        """
+        n = len(predicted_cost)
+        # sample new thetas from the original prior
+        theta_new = self.sample(batch_shape=(n,), cost_aware=False)
+        prior_cost = self.cost_model(theta_new.get("parameters"))
+
+        avg_cost_prior = np.mean(prior_cost)
+        avg_cost_accepted = np.mean(predicted_cost)
+
+        return avg_cost_prior / avg_cost_accepted
+
+    def compute_metrics(self, accepted_samples: dict[str, np.ndarray]) -> dict[str, float]:
+        """Compute performance metrics for the cost-aware sampling.
+
+        Parameters
+        ----------
+        accepted_samples : dict of str to np.ndarray
+            The dict returned by :py:meth:`sample`, containing 'theta' or
+            'parameters' and 'k' -- the k value each sample was actually
+            accepted under. Each sample's cost is regularized with its own k,
+            so a mixture of k values (as MIS produces) is handled correctly
+            instead of being collapsed onto a single k.
 
         Returns
         -------
@@ -236,32 +285,29 @@ class CostAwareProposal(Simulator):
             A dictionary containing metrics 'ess' (Effective Sample Size)
             and 'cg' (Computational Gain).
         """
+        try:
+            theta = accepted_samples["theta"]
+        except KeyError:
+            try:
+                theta = accepted_samples["parameters"]
+            except KeyError:
+                raise KeyError("accepted_samples must contain 'theta' or 'parameters'.")
 
-        if isinstance(theta, dict):
-            theta = theta["theta"]
+        try:
+            k_vals = accepted_samples["k"]
+        except KeyError:
+            raise KeyError("accepted_samples must contain 'k'.")
 
-        k_val = kvec[0] if isinstance(kvec, (list, np.ndarray)) else kvec
+        theta = np.asarray(theta)
+        k_vals = np.asarray(k_vals)
 
         predicted_cost = self.cost_model(theta)
-        g_val = self.regularize_cost(predicted_cost, k=k_val)
 
         # Effective Sample Size (ESS)
-        # ESS = (sum w)^2 / n sum(w^2)
-        ess = np.sum(g_val)**2 / (len(g_val)*np.sum(g_val**2)) if len(g_val) > 0 else 0.0
+        ess = self.compute_ess(theta, k_vals)
 
         # Computational Gain (CG)
-        # CG = (Average cost of prior samples) / (Average cost of accepted samples)
-        # sample new thetas from the original prior
-
-        theta_new = self.sample(batch_shape=g_val.shape, k=k_val, cost_aware=False)
-        res_prior = self.cost_model(theta_new.get("parameters"))
-        prior_cost = res_prior
-
-        avg_cost_prior = np.mean(prior_cost)
-
-        avg_cost_accepted = np.mean(predicted_cost)
-
-        cg = avg_cost_prior / avg_cost_accepted
+        cg = self.compute_cg(predicted_cost)
 
         return {"ess": ess, "cg": cg}
 
