@@ -42,6 +42,37 @@ class CostAwareProposal(Simulator):
         self.gmin = gmin #cost offset
         self.max_attempts = max_attempts
 
+    def _extract_samples(self, samples: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+        """Extract theta and k values from the samples dictionary.
+
+        Parameters
+        ----------
+        samples : dict of str to np.ndarray
+            The samples dictionary.
+
+        Returns
+        -------
+        theta : np.ndarray
+            The parameter values.
+        k_vals : np.ndarray
+            The k values.
+        """
+        try:
+            theta = samples["theta"]
+        except KeyError:
+            try:
+                theta = samples["parameters"]
+            except KeyError:
+                raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
+
+        try:
+            k_vals = samples["k"]
+        except KeyError:
+            raise KeyError("Samples dictionary must contain 'k'.")
+
+        return np.asarray(theta), np.asarray(k_vals)
+
+
     @allow_batch_size
     def sample(self, batch_shape: Shape, k: float | np.ndarray | list = 1.0, cost_aware: bool = True, **kwargs) -> dict[str, np.ndarray]:
         """Sample the prior
@@ -72,7 +103,11 @@ class CostAwareProposal(Simulator):
             # Return samples from the prior directly
             total_samples = np.prod(batch_shape) if not isinstance(batch_shape, int) else batch_shape
             theta_samples = np.stack([self.prior() for _ in range(total_samples)])
-            return {"parameters": theta_samples}
+            
+            # Ensure k is provided in the output for consistency with _extract_samples
+            # Use a default k=1.0 if the provided k is not a scalar
+            k_val = k if np.isscalar(k) else 1.0
+            return {"parameters": theta_samples, "k": np.full(total_samples, k_val)}
 
         k_vals = np.atleast_1d(k)
         n_k = len(k_vals)
@@ -137,7 +172,8 @@ class CostAwareProposal(Simulator):
                     all_outputs[key] = []
                 all_outputs[key].append(val)
 
-            all_ks.append(np.full(current_batch_size, k_val))
+            # Use the actual number of accepted samples for k values to avoid length mismatch
+            all_ks.append(np.full(len(theta_accepted), k_val))
 
         # Reconstruct results dictionary
         final_results = {key: np.concatenate(vals) for key, vals in all_outputs.items()}
@@ -196,18 +232,7 @@ class CostAwareProposal(Simulator):
         weights : np.ndarray
             Importance weights for the accepted samples.
         """
-        try:
-            theta = accepted_samples["theta"]
-        except KeyError:
-            try:
-                theta = accepted_samples["parameters"]
-            except KeyError:
-                raise KeyError("accepted_samples must contain 'theta' or 'parameters'.")
-
-        try:
-            k_vals = accepted_samples["k"]
-        except KeyError:
-            raise KeyError("accepted_samples must contain 'k'.")
+        theta, k_vals = self._extract_samples(accepted_samples)
 
         distinct_ks = np.unique(k_vals)
         weights = np.zeros_like(k_vals, dtype=float)
@@ -219,21 +244,21 @@ class CostAwareProposal(Simulator):
 
         return weights / len(distinct_ks)
     
-    def compute_ess(self, theta: np.ndarray, k_vals: np.ndarray) -> float:
+    def compute_ess(self, accepted_samples: dict[str, np.ndarray]) -> float:
         """Compute the Effective Sample Size (ESS).
 
         Parameters
         ----------
-        theta : np.ndarray
-            The accepted parameter samples.
-        k_vals : np.ndarray
-            The k values used for each sample.
+        accepted_samples : dict of str to np.ndarray
+            A dictionary containing 'theta' (or 'parameters') and 'k' arrays.
 
         Returns
         -------
         ess : float
             The Effective Sample Size.
         """
+        theta, k_vals = self._extract_samples(accepted_samples)
+
         n = len(theta)
         predicted_cost = self.cost_model(theta)
         g_val = np.empty(n, dtype=float)
@@ -244,20 +269,23 @@ class CostAwareProposal(Simulator):
 
         return np.sum(g_val) ** 2 / (n * np.sum(g_val**2)) if n > 0 else 0.0
 
-    def compute_cg(self, predicted_cost: np.ndarray) -> float:
+    def compute_cg(self, accepted_samples: dict[str, np.ndarray]) -> float:
         """Compute the Computational Gain (CG).
 
         Parameters
         ----------
-        predicted_cost : np.ndarray
-            The predicted costs of the accepted samples.
+        accepted_samples : dict of str to np.ndarray
+            A dictionary containing 'theta' (or 'parameters') and 'k' arrays.
 
         Returns
         -------
         cg : float
             The Computational Gain.
         """
+        theta, _ = self._extract_samples(accepted_samples)
+        predicted_cost = self.cost_model(theta)
         n = len(predicted_cost)
+
         # sample new thetas from the original prior
         theta_new = self.sample(batch_shape=(n,), cost_aware=False)
         prior_cost = self.cost_model(theta_new.get("parameters"))
@@ -285,33 +313,15 @@ class CostAwareProposal(Simulator):
             A dictionary containing metrics 'ess' (Effective Sample Size)
             and 'cg' (Computational Gain).
         """
-        try:
-            theta = accepted_samples["theta"]
-        except KeyError:
-            try:
-                theta = accepted_samples["parameters"]
-            except KeyError:
-                raise KeyError("accepted_samples must contain 'theta' or 'parameters'.")
-
-        try:
-            k_vals = accepted_samples["k"]
-        except KeyError:
-            raise KeyError("accepted_samples must contain 'k'.")
-
-        theta = np.asarray(theta)
-        k_vals = np.asarray(k_vals)
-
-        predicted_cost = self.cost_model(theta)
-
         # Effective Sample Size (ESS)
-        ess = self.compute_ess(theta, k_vals)
+        ess = self.compute_ess(accepted_samples)
 
         # Computational Gain (CG)
-        cg = self.compute_cg(predicted_cost)
+        cg = self.compute_cg(accepted_samples)
 
         return {"ess": ess, "cg": cg}
 
-    def predicate(self, samples: dict[str, np.ndarray], k: float = 1.0) -> np.ndarray:
+    def predicate(self, samples: dict[str, np.ndarray] | np.ndarray, k: float = 1.0) -> np.ndarray:
         """The cost-aware acceptance predicate.
 
         Given a batch of samples, this returns a boolean array indicating which
@@ -319,8 +329,8 @@ class CostAwareProposal(Simulator):
 
         Parameters
         ----------
-        samples : dict of str to np.ndarray
-            A batch of samples, as returned by :py:meth:`sample`.
+        samples : dict of str to np.ndarray or np.ndarray
+            A batch of samples, as returned by :py:meth:`sample` or just the parameters.
         k : float, optional
             Power factor for cost regularization. Default is 1.0.
 
@@ -329,13 +339,15 @@ class CostAwareProposal(Simulator):
         accept : np.ndarray
             A boolean array of shape ``(batch_size,)``.
         """
-        try:
-            theta = samples["theta"]
-        except KeyError:
+        if isinstance(samples, dict):
             try:
-                theta = samples["parameters"]
+                theta = samples["theta"]
             except KeyError:
-                raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
+                theta = samples.get("parameters")
+                if theta is None:
+                    raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
+        else:
+            theta = samples
 
         predicted_cost = self.cost_model(theta)
 
