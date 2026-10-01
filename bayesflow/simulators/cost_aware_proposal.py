@@ -58,12 +58,9 @@ class CostAwareProposal(Simulator):
             The k values.
         """
         try:
-            theta = samples["theta"]
+            theta = samples["parameters"]
         except KeyError:
-            try:
-                theta = samples["parameters"]
-            except KeyError:
-                raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
+            raise KeyError("Samples dictionary must contain 'parameters'.")
 
         try:
             k_vals = samples["k"]
@@ -275,7 +272,7 @@ class CostAwareProposal(Simulator):
         Parameters
         ----------
         accepted_samples : dict of str to np.ndarray
-            A dictionary containing 'theta' (or 'parameters') and 'k' arrays.
+            A dictionary containing 'parameters' and 'k' arrays.
 
         Returns
         -------
@@ -301,8 +298,8 @@ class CostAwareProposal(Simulator):
         Parameters
         ----------
         accepted_samples : dict of str to np.ndarray
-            The dict returned by :py:meth:`sample`, containing 'theta' or
-            'parameters' and 'k' -- the k value each sample was actually
+            The dict returned by :py:meth:`sample`, containing 'parameters'
+            and 'k' -- the k value each sample was actually
             accepted under. Each sample's cost is regularized with its own k,
             so a mixture of k values (as MIS produces) is handled correctly
             instead of being collapsed onto a single k.
@@ -340,12 +337,9 @@ class CostAwareProposal(Simulator):
             A boolean array of shape ``(batch_size,)``.
         """
         if isinstance(samples, dict):
-            try:
-                theta = samples["theta"]
-            except KeyError:
-                theta = samples.get("parameters")
-                if theta is None:
-                    raise KeyError("Samples dictionary must contain 'theta' or 'parameters'.")
+            theta = samples.get("parameters")
+            if theta is None:
+                raise KeyError("Samples dictionary must contain 'parameters'.")
         else:
             theta = samples
 
