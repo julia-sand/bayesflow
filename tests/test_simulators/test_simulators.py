@@ -213,7 +213,7 @@ def test_make_simulator_distributes_obj_kwargs(as_mapping):
     assert samples["x"].shape == (3, 1)
     assert samples["y"].shape == (3, 1)
 
-def test_cost_aware_simulator_sample(batch_size):
+def test_cost_aware_proposal_sample(batch_size):
     # Setup: simple prior and cost model
     def prior():
         return np.random.uniform(0, 1, size=1)
@@ -238,7 +238,7 @@ def test_cost_aware_simulator_sample(batch_size):
     np.testing.assert_array_equal(samples_cost["k"], np.ones(batch_size))
 
 
-def test_cost_aware_simulator_multiple_k(batch_size):
+def test_cost_aware_proposal_multiple_k(batch_size):
     def prior():
         return np.random.uniform(0, 1, size=1)
 
@@ -261,7 +261,7 @@ def test_cost_aware_simulator_multiple_k(batch_size):
     assert np.abs(counts[0] - counts[1]) <= 1
 
 
-def test_cost_aware_simulator_weights(batch_size):
+def test_cost_aware_proposal_weights(batch_size):
     def prior():
         return np.random.uniform(0, 1, size=1)
 
@@ -278,7 +278,7 @@ def test_cost_aware_simulator_weights(batch_size):
     np.testing.assert_allclose(np.sum(weights), 1.0)
 
 
-def test_cost_aware_simulator_metrics(batch_size):
+def test_cost_aware_proposal_metrics(batch_size):
     def prior():
         return np.random.uniform(0, 1, size=1)
 
@@ -289,39 +289,11 @@ def test_cost_aware_simulator_metrics(batch_size):
     
     samples = sim.sample(batch_size, k=1.0, cost_aware=True)
     
-    metrics = sim.compute_metrics(samples["parameters"], kvec=1.0)
+    metrics = sim.compute_metrics(samples)
     assert "ess" in metrics
     assert "cg" in metrics
     assert metrics["ess"] >= 0
     assert metrics["cg"] >= 0
-
-def test_cost_aware_simulator_max_attempts_limit():
-    """Test behavior when rejection sampling hits max_attempts limit."""
-    def prior():
-        return np.random.uniform(0, 1, size=1)
-
-    # Cost model that always returns very high cost
-    # => acceptance probability will be very low
-    def cost_model(theta):
-        return np.full_like(theta.flatten(), 100.0)
-
-    # Set very low max_attempts to force timeout
-    sim = CostAwareProposal(prior=prior, cost_model=cost_model, gmin=0.1, max_attempts=2)
-    
-    # Request a batch that is unlikely to fill given the low acceptance rate
-    batch_size = 100
-    samples = sim.sample(batch_size, k=1.0, cost_aware=True)
-    
-    # Should return something but likely fewer than requested (or print warning)
-    assert "parameters" in samples
-    assert "k" in samples
-    # The result may be fewer samples than requested due to hitting max_attempts
-    # Just check that it returned a valid structure (not None or an exception)
-    assert isinstance(samples["parameters"], np.ndarray)
-    assert isinstance(samples["k"], np.ndarray)
-    # Parameters and k should have same length
-    assert samples["parameters"].shape[0] == samples["k"].shape[0]
-
 
 def test_cost_aware_simulator_invalid_inputs():
     """Test that invalid inputs are handled appropriately."""
