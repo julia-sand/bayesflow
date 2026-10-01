@@ -105,6 +105,9 @@ class CostAwareProposal(Simulator):
             # Use a default k=1.0 if the provided k is not a scalar
             k_val = k if np.isscalar(k) else 1.0
             return {"parameters": theta_samples, "k": np.full(total_samples, k_val)}
+        if isinstance(k, (list, np.ndarray)) and len(k) == 0:
+            raise ValueError("The 'k' argument cannot be an empty list or array.")
+
 
         k_vals = np.atleast_1d(k)
         n_k = len(k_vals)
