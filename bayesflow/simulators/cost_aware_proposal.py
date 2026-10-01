@@ -96,18 +96,19 @@ class CostAwareProposal(Simulator):
               k value was used for each sample.
         """
 
+        #check incase user passes k=[]
+        if isinstance(k, (list, np.ndarray)) and len(k) == 0:
+            raise ValueError("The 'k' argument cannot be an empty list or array.")
+
         if not cost_aware:
             # Return samples from the prior directly
             total_samples = np.prod(batch_shape) if not isinstance(batch_shape, int) else batch_shape
             theta_samples = np.stack([self.prior() for _ in range(total_samples)])
             
             # Ensure k is provided in the output for consistency with _extract_samples
-            # Use a default k=1.0 if the provided k is not a scalar
-            k_val = k if np.isscalar(k) else 1.0
+            # Use k=0.0 to indicate unchanged prior
+            k_val = 0.0
             return {"parameters": theta_samples, "k": np.full(total_samples, k_val)}
-        if isinstance(k, (list, np.ndarray)) and len(k) == 0:
-            raise ValueError("The 'k' argument cannot be an empty list or array.")
-
 
         k_vals = np.atleast_1d(k)
         n_k = len(k_vals)
@@ -155,9 +156,12 @@ class CostAwareProposal(Simulator):
 
             if current_count < current_batch_size:
                 print(f"Warning: Rejection sampling for k={k_val} reached max_attempts ({self.max_attempts}) "
-                      f"without filling the batch. Collected {current_count} "
-                      f"out of {current_batch_size} samples.")
-
+                    f"without filling the batch. Collected {current_count} "
+                    f"out of {current_batch_size} samples.")
+                if n_k > 1:
+                    raise RuntimeError(f"Multiple Importance Sampling failed: k={k_val} did not get the full number of samples "
+                                    f"({current_count}/{current_batch_size}). This would lead to an incorrect mixture. ")
+                
             # Concatenate and truncate to exact size
             if accepted_theta:
                 theta_accepted = np.concatenate(accepted_theta)[:current_batch_size]
