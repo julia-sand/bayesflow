@@ -1,6 +1,40 @@
 import pytest
 import keras
 import numpy as np
+from bayesflow.simulators import CostAwareProposal
+
+
+def assert_unique_rows(array):
+    rows = np.reshape(array, (array.shape[0], -1))
+    assert np.unique(rows, axis=0).shape[0] == rows.shape[0]
+
+
+def test_sample_parallel_reseeds_worker_rngs():
+    pytest.importorskip("joblib")
+
+    from bayesflow.simulators import LambdaSimulator, SequentialSimulator
+
+    closure_rng = np.random.default_rng(123)
+
+    def closure_prior():
+        return {"closure": closure_rng.integers(0, 2**31 - 1, size=4)}
+
+    class AttributePrior:
+        def __init__(self):
+            self.rng = np.random.default_rng(456)
+
+        def sample(self, batch_shape, **kwargs):
+            return {"attribute": self.rng.integers(0, 2**31 - 1, size=tuple(batch_shape) + (4,))}
+
+    def make_simulator():
+        return SequentialSimulator([LambdaSimulator(closure_prior), AttributePrior()])
+
+    first = make_simulator().sample_parallel((12,), n_jobs=2, seed=789)
+    second = make_simulator().sample_parallel((12,), n_jobs=2, seed=789)
+
+    for key, value in first.items():
+        np.testing.assert_array_equal(value, second[key])
+        assert_unique_rows(value)
 
 
 def test_two_moons(two_moons_simulator, batch_size):
@@ -89,3 +123,196 @@ def test_multimodel_key_conflicts_sample(multimodel_key_conflicts, batch_size):
     elif multimodel_key_conflicts.key_conflicts == "error":
         with pytest.raises(ValueError):
             samples = multimodel_key_conflicts.sample(batch_size)
+
+
+def test_multimodel_single_batch(multimodel_single_batch, batch_size):
+    samples = multimodel_single_batch.sample(batch_size)
+    # all samples in the batch come from the same model
+    assert {"mu", "y", "model_indices"}.issubset(set(samples))
+    assert samples["model_indices"].shape == (batch_size, 2)
+    # every row of model_indices must be identical (single model for whole batch)
+    assert np.all(samples["model_indices"] == samples["model_indices"][0])
+
+
+def test_multimodel_p_argument(batch_size):
+    from bayesflow.simulators import make_simulator, ModelComparisonSimulator
+
+    def prior_0():
+        return dict(mu=0.0)
+
+    def prior_1():
+        return dict(mu=np.random.standard_normal())
+
+    def likelihood(mu):
+        return dict(y=np.random.normal(mu, 1, 4))
+
+    sim0 = make_simulator([prior_0, likelihood])
+    sim1 = make_simulator([prior_1, likelihood])
+
+    # valid probabilities must sum to 1
+    simulator = ModelComparisonSimulator(simulators=[sim0, sim1], p=[0.3, 0.7])
+    samples = simulator.sample(batch_size)
+    assert set(samples) >= {"model_indices", "y"}
+
+    # invalid probabilities should raise
+    with pytest.raises(ValueError, match="sum to 1"):
+        ModelComparisonSimulator(simulators=[sim0, sim1], p=[0.3, 0.3])
+
+    # p and logits are mutually exclusive
+    with pytest.raises(ValueError, match="conflicting"):
+        ModelComparisonSimulator(simulators=[sim0, sim1], p=[0.5, 0.5], logits=[0.0, 0.0])
+
+    # non-positive probabilities must raise
+    with pytest.raises(ValueError, match="positive"):
+        ModelComparisonSimulator(simulators=[sim0, sim1], p=[0.0, 1.0])
+    with pytest.raises(ValueError, match="positive"):
+        ModelComparisonSimulator(simulators=[sim0, sim1], p=[-0.1, 1.1])
+
+
+def test_model_comparison_simulator_logits_length_mismatch():
+    from bayesflow.simulators import make_simulator, ModelComparisonSimulator
+    import numpy as np
+
+    sim = make_simulator([lambda: dict(x=np.random.normal())])
+    with pytest.raises(ValueError, match="[Ll]ength"):
+        ModelComparisonSimulator(simulators=[sim, sim], logits=[0.0, 0.0, 0.0])
+
+
+def test_model_comparison_simulator_shared_simulator_callable(batch_size):
+    from bayesflow.simulators import make_simulator, ModelComparisonSimulator
+    import numpy as np
+
+    def shared(batch_size):
+        return dict(shared=np.ones(batch_size))
+
+    def model():
+        return dict(x=np.random.normal())
+
+    sim = make_simulator([model])
+    mc_sim = ModelComparisonSimulator(simulators=[sim, sim], shared_simulator=shared)
+    samples = mc_sim.sample(batch_size)
+    assert "shared" in samples
+    assert "model_indices" in samples
+
+@pytest.mark.parametrize("as_mapping", [False, True])
+def test_make_simulator_distributes_obj_kwargs(as_mapping):
+    from bayesflow.simulators import make_simulator
+
+    def first(a=1):
+        return {"x": np.array(a)}
+
+    def second(batch_shape, b=1):
+        return {"y": np.full(batch_shape, b)}
+
+    objs = {"first": first, "second": second} if as_mapping else [first, second]
+    obj_kwargs = {"second": {"is_batched": True}}
+
+    simulator = make_simulator(objs, obj_kwargs=obj_kwargs)
+    samples = simulator.sample(3)
+
+    assert samples["x"].shape == (3, 1)
+    assert samples["y"].shape == (3, 1)
+
+def test_cost_aware_proposal_sample(batch_size):
+    # Setup: simple prior and cost model
+    def prior():
+        return np.random.uniform(0, 1, size=1)
+
+    # Cost model: cost increases with theta. Lower theta = cheaper.
+    def cost_model(theta):
+        return theta.flatten()
+
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model, gmin=0.1)
+
+    # Test cost_aware=False: should return samples directly from prior
+    samples_no_cost = sim.sample(batch_size, cost_aware=False)
+    assert "parameters" in samples_no_cost
+    assert samples_no_cost["parameters"].shape == (batch_size, 1)
+
+    # Test cost_aware=True: should return samples and k
+    samples_cost = sim.sample(batch_size, k=1.0, cost_aware=True)
+    assert "parameters" in samples_cost
+    assert "k" in samples_cost
+    assert samples_cost["parameters"].shape == (batch_size, 1)
+    assert samples_cost["k"].shape == (batch_size,)
+    np.testing.assert_array_equal(samples_cost["k"], np.ones(batch_size))
+
+
+def test_cost_aware_proposal_multiple_k(batch_size):
+    def prior():
+        return np.random.uniform(0, 1, size=1)
+
+    def cost_model(theta):
+        return theta.flatten()
+
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model)
+    k_vals = [0.5, 1.5]
+    
+    samples = sim.sample(batch_size, k=k_vals, cost_aware=True)
+    
+    assert "parameters" in samples
+    assert "k" in samples
+    assert samples["parameters"].shape == (batch_size, 1)
+    assert samples["k"].shape == (batch_size,)
+    
+    # Check if both k values are present (roughly equal split)
+    unique_ks, counts = np.unique(samples["k"], return_counts=True)
+    assert set(unique_ks) == set(k_vals)
+    assert np.abs(counts[0] - counts[1]) <= 1
+
+
+def test_cost_aware_proposal_weights(batch_size):
+    def prior():
+        return np.random.uniform(0, 1, size=1)
+
+    def cost_model(theta):
+        return theta.flatten()
+
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model)
+    
+    # Sample some data
+    samples = sim.sample(batch_size, k=1.0, cost_aware=True)
+    
+    weights = sim.compute_weights(samples)
+    assert weights.shape == (batch_size,)
+    np.testing.assert_allclose(np.sum(weights), 1.0)
+
+
+def test_cost_aware_proposal_metrics(batch_size):
+    def prior():
+        return np.random.uniform(0, 1, size=1)
+
+    def cost_model(theta):
+        return theta.flatten()
+
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model)
+    
+    samples = sim.sample(batch_size, k=1.0, cost_aware=True)
+    
+    metrics = sim.compute_metrics(samples)
+    assert "ess" in metrics
+    assert "cg" in metrics
+    assert metrics["ess"] >= 0
+    assert metrics["cg"] >= 0
+
+def test_cost_aware_simulator_invalid_inputs():
+    """Test that invalid inputs are handled appropriately."""
+    def prior():
+        return np.random.uniform(0, 1, size=1)
+
+    def cost_model(theta):
+        return theta.flatten()
+
+    sim = CostAwareProposal(prior=prior, cost_model=cost_model)
+    
+    # Test empty k list
+    with pytest.raises((ValueError, IndexError)):
+        sim.sample(10, k=[], cost_aware=True)
+    
+    # Test missing 'parameters' or 'theta' key in compute_weights
+    with pytest.raises(KeyError):
+        sim.compute_weights({"k": np.array([1.0])})
+    
+    # Test missing 'k' key in compute_weights
+    with pytest.raises(KeyError):
+        sim.compute_weights({"parameters": np.array([[0.5]])})
