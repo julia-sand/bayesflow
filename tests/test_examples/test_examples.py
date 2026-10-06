@@ -43,3 +43,9 @@ def test_two_moons_starter(examples_path):
 @pytest.mark.slow
 def test_likelihood_estimation(examples_path):
     run_notebook(examples_path / "Likelihood_Estimation.ipynb")
+
+
+@pytest.mark.slow
+def test_sir_posterior_estimation(examples_path):
+    run_notebook(examples_path / "Cost_Aware_Sampling.ipynb")
+
