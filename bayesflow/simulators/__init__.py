@@ -4,6 +4,7 @@ and several other kinds of :py:class:`~bayesflow.simulators.Simulator` implement
 mathematical models, or data generating processes, with their primary function being to sample data.
 """
 
+from .cost_aware_proposal import CostAwareProposal
 from .sequential_simulator import SequentialSimulator
 from .hierarchical_simulator import HierarchicalSimulator
 from .lambda_simulator import LambdaSimulator

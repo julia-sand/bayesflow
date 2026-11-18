@@ -28,3 +28,4 @@ The corresponding Jupyter Notebooks are available :mainbranch:`here <examples/>`
    From ABC to BayesFlow <_examples/From_ABC_to_BayesFlow>
    Bayesian experimental design <_examples/Bayesian_Experimental_Design>
    Model predictive control <_examples/Model_Predictive_Control>
+   Cost-aware sampling <_examples/Cost_Aware_Sampling>
