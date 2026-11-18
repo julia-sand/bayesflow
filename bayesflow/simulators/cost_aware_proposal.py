@@ -10,7 +10,8 @@ from .simulator import Simulator
 class CostAwareProposal(Simulator):
     """Samples a prior distribution based on a cost function.
 
-    Simulation-based inference (SBI) can be expensive in terms of computational time. Its cost can often depend on the parameter values used in the simulation.
+    Simulation-based inference (SBI) can be expensive in terms of computational time.
+    Its cost can often depend on the parameter values used in the simulation.
     Cost-aware SBI reduces the cost of simulating data by sampling the
     parameters from a proxy prior biased towards parameter values that have a lower simulation cost. The
     bias is introduced through rejection sampling whose acceptance probability is a
@@ -71,7 +72,13 @@ class CostAwareProposal(Simulator):
 
 
     @allow_batch_size
-    def sample(self, batch_shape: Shape, k: float | np.ndarray | list = 1.0, cost_aware: bool = True, **kwargs) -> dict[str, np.ndarray]:
+    def sample(
+        self,
+        batch_shape: Shape,
+        k: float | np.ndarray | list = 1.0,
+        cost_aware: bool = True,
+        **kwargs,
+    ) -> dict[str, np.ndarray]:
         """Sample the prior
 
         Parameters
@@ -104,9 +111,9 @@ class CostAwareProposal(Simulator):
             # Return samples from the prior directly
             total_samples = np.prod(batch_shape) if not isinstance(batch_shape, int) else batch_shape
             theta_samples = np.stack([self.prior() for _ in range(total_samples)])
-            
+
             # Ensure k is provided in the output for consistency with _extract_samples
-            # Use k=0.0 to indicate unchanged prior, all samples will be accepted 
+            # Use k=0.0 to indicate unchanged prior, all samples will be accepted
             k_val = 0.0
             return {"parameters": theta_samples, "k": np.full(total_samples, k_val)}
 
@@ -148,7 +155,7 @@ class CostAwareProposal(Simulator):
                 # Evaluate predicate
                 mask = self.predicate({"parameters": theta_batch}, k=k_val)
                 accepted_batch = theta_batch[mask]
-                
+
                 if len(accepted_batch) > 0:
                     accepted_theta.append(accepted_batch)
                     current_count += len(accepted_batch)
@@ -158,14 +165,16 @@ class CostAwareProposal(Simulator):
                     f"without filling the batch. Collected {current_count} "
                     f"out of {current_batch_size} samples.")
                 if n_k > 1:
-                    raise RuntimeError(f"Multiple Importance Sampling failed: k={k_val} did not get the full number of samples "
-                                    f"({current_count}/{current_batch_size}). This would lead to an incorrect mixture. ")
-                
+                    raise RuntimeError(
+                        f"Multiple Importance Sampling failed: k={k_val} did not get the full number of samples "
+                        f"({current_count}/{current_batch_size}). This would lead to an incorrect mixture."
+                    )
+
             # Concatenate and truncate to exact size
             if accepted_theta:
                 theta_accepted = np.concatenate(accepted_theta)[:current_batch_size]
             else:
-                print(f"Warning: No samples were accepted. Try adjusting gmin or k.")
+                print("Warning: No samples were accepted. Try adjusting gmin or k.")
                 theta_accepted = np.array([]).reshape(0, *self.prior().shape)
 
             res = {"parameters": theta_accepted}
@@ -246,7 +255,7 @@ class CostAwareProposal(Simulator):
             weights[mask] = self.compute_weights_per_k(theta_k, k)
 
         return weights / len(distinct_ks)
-    
+
     def compute_ess(self, accepted_samples: dict[str, np.ndarray]) -> float:
         """Compute the Effective Sample Size (ESS).
 

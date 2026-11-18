@@ -287,14 +287,14 @@ def test_cost_aware_proposal_multiple_k(batch_size):
 
     sim = CostAwareProposal(prior=prior, cost_model=cost_model)
     k_vals = [0.5, 1.5]
-    
+
     samples = sim.sample(batch_size, k=k_vals, cost_aware=True)
-    
+
     assert "parameters" in samples
     assert "k" in samples
     assert samples["parameters"].shape == (batch_size, 1)
     assert samples["k"].shape == (batch_size,)
-    
+
     # Check if both k values are present (roughly equal split)
     unique_ks, counts = np.unique(samples["k"], return_counts=True)
     assert set(unique_ks) == set(k_vals)

@@ -45,6 +45,5 @@ def test_likelihood_estimation(examples_path):
 
 
 @pytest.mark.slow
-def test_sir_posterior_estimation(examples_path):
+def test_cost_aware_sampling(examples_path):
     run_notebook(examples_path / "Cost_Aware_Sampling.ipynb")
-
